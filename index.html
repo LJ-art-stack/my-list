@@ -318,6 +318,7 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
 
 /* 数据弹层内的行按钮 */
 .note{font-size:12.5px;color:var(--muted);line-height:1.6;margin:6px 0 14px}
+.note.ver{text-align:center;margin:18px 0 2px;opacity:.7;font-size:11.5px}
 .rowbtn{
   display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
   padding:15px 2px;border-bottom:1px solid var(--line);
@@ -476,6 +477,7 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
       <span>清空全部任务</span>
       <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13"/></svg>
     </button>
+    <p class="note ver">版本 1.1 · 日历提醒</p>
   </div>
   <div class="sheet-actions">
     <button class="btn primary" type="button" data-close>完成</button>
@@ -1198,7 +1200,16 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
 
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
     window.addEventListener('load', function(){
-      navigator.serviceWorker.register('sw.js').catch(function(){});
+      var hadCtrl = !!navigator.serviceWorker.controller;
+      var reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function(){
+        if (!hadCtrl || reloading) return;
+        reloading = true;
+        location.reload();
+      });
+      navigator.serviceWorker.register('sw.js').then(function(reg){
+        reg.update().catch(function(){});
+      }).catch(function(){});
     });
   }
 })();
