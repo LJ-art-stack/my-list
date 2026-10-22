@@ -293,7 +293,7 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
   height:38px;padding:0 15px;border-radius:11px;
   border:1px solid var(--line);background:var(--input-bg);
   font-size:13.5px;font-weight:600;color:var(--muted);
-  transition:all .14s ease;
+  transition:background-color .14s ease,border-color .14s ease,color .14s ease,transform .14s ease;
 }
 .opt.on{background:var(--accent-bg);border-color:var(--accent);color:var(--accent)}
 .opt:active{transform:scale(.97)}
@@ -432,6 +432,15 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
       </div>
     </div>
 
+    <div class="field">
+      <div class="label"><span>日历提醒</span><span class="counter" id="remindVal">开启</span></div>
+      <div class="opts" id="fRemind">
+        <button class="opt" type="button" data-remind="1">开启</button>
+        <button class="opt" type="button" data-remind="0">关闭</button>
+      </div>
+      <p class="note" style="margin:8px 0 0">截止前 7 天 · 3 天 · 2 天 · 1 天 · 15 小时 · 2 小时各提醒一次</p>
+    </div>
+
     <p class="hint" id="formHint"></p>
   </form>
   <div class="sheet-actions">
@@ -458,6 +467,10 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
     <button class="rowbtn" type="button" id="importBtn">
       <span>从备份文件导入<span class="sub" style="display:block">会替换当前全部任务</span></span>
       <svg viewBox="0 0 24 24"><path d="M12 16V5M7 10l5-5 5 5M5 20h14"/></svg>
+    </button>
+    <button class="rowbtn" type="button" id="calBtn">
+      <span>同步到系统日历<span class="sub" style="display:block">按提醒点自动弹通知，App 关着也有效</span></span>
+      <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>
     </button>
     <button class="rowbtn danger" type="button" id="wipeBtn">
       <span>清空全部任务</span>
@@ -490,6 +503,16 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
   var KEY = 'daily-list-v1';
   var MAX_TITLE = 10;
 
+  /* 提醒时间点：截止前 7天/3天/2天/1天/15小时/2小时 */
+  var REMIND = [
+    { trigger:'-P7D',   ms:7 * 86400000 },
+    { trigger:'-P3D',   ms:3 * 86400000 },
+    { trigger:'-P2D',   ms:2 * 86400000 },
+    { trigger:'-P1D',   ms:86400000 },
+    { trigger:'-PT15H', ms:15 * 3600000 },
+    { trigger:'-PT2H',  ms:2 * 3600000 }
+  ];
+
   /* ================= 状态 ================= */
   var tasks = [];
   var filter = 'all';
@@ -498,6 +521,7 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
   var editingId = null;
   var curCat = '';
   var curStars = 0;
+  var curRemind = true;
   var etaTouched = false;
   var currentSheet = null;
   var toastTimer = null;
@@ -592,6 +616,8 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
       etaTime: etaTime,
       done: !!t.done,
       doneAt: t.done ? (Number(t.doneAt) || Date.now()) : null,
+      remind: t.remind === false ? false : true,
+      rev: Number(t.rev) || 0,
       createdAt: Number(t.createdAt) || Date.now()
     };
   }
@@ -794,6 +820,17 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
     $('#starVal').textContent = curStars ? curStars + ' 星' : '未选择';
   }
 
+  function setRemind(on){
+    curRemind = !!on;
+    var btns = $('#fRemind').querySelectorAll('.opt');
+    for (var i = 0; i < btns.length; i++){
+      var v = btns[i].getAttribute('data-remind') === '1';
+      btns[i].classList.toggle('on', v === curRemind);
+      btns[i].setAttribute('aria-pressed', String(v === curRemind));
+    }
+    $('#remindVal').textContent = curRemind ? '开启' : '关闭';
+  }
+
   function updateTitleCount(){
     var s = $('#fTitle').value;
     var n = charLen(s.trim());
@@ -823,6 +860,7 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
     $('#fTitle').value = t ? t.title : '';
     setCat(t ? t.category : '');
     setStars(t ? t.stars : 0);
+    setRemind(t ? t.remind !== false : true);
     $('#fDueDate').value = t ? t.dueDate : dateStr(new Date());
     $('#fDueTime').value = t && t.dueTime ? t.dueTime : '';
     $('#fEtaDate').value = t ? t.etaDate : $('#fDueDate').value;
@@ -865,13 +903,15 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
       dueDate: dueDate,
       dueTime: $('#fDueTime').value || null,
       etaDate: etaDate,
-      etaTime: etaTime
+      etaTime: etaTime,
+      remind: curRemind
     };
 
     if (editingId){
       for (var i = 0; i < tasks.length; i++){
         if (tasks[i].id === editingId){
           Object.keys(data).forEach(function(k){ tasks[i][k] = data[k]; });
+          tasks[i].rev = (Number(tasks[i].rev) || 0) + 1;
           break;
         }
       }
@@ -955,6 +995,106 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
     reader.readAsText(file);
   }
 
+  /* ================= 日历同步 ================= */
+  function icsEsc(s){
+    return String(s == null ? '' : s)
+      .replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,')
+      .replace(/\r?\n/g, '\\n');
+  }
+  function icsStamp(d){
+    return d.getUTCFullYear() + pad2(d.getUTCMonth() + 1) + pad2(d.getUTCDate()) + 'T' +
+      pad2(d.getUTCHours()) + pad2(d.getUTCMinutes()) + pad2(d.getUTCSeconds()) + 'Z';
+  }
+  function icsLocal(d){
+    return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + 'T' +
+      pad2(d.getHours()) + pad2(d.getMinutes()) + '00';
+  }
+
+  function buildCalendar(list){
+    var now = new Date();
+    var out = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//MyList//Daily List//CN',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'X-WR-CALNAME:我的清单',
+      'X-WR-TIMEZONE:Asia/Shanghai'
+    ];
+
+    list.forEach(function(t){
+      var due = dueInstant(t);
+      var cat = CAT_MAP[t.category] || CAT_MAP.other;
+      out.push('BEGIN:VEVENT');
+      out.push('UID:' + icsEsc(t.id) + '@my-list');
+      out.push('DTSTAMP:' + icsStamp(now));
+      out.push('DTSTART:' + icsLocal(due));
+      out.push('DTEND:' + icsLocal(new Date(due.getTime() + 30 * 60000)));
+      out.push('SUMMARY:' + icsEsc(t.title));
+      out.push('DESCRIPTION:' + icsEsc(cat.name + ' · ' + t.stars + ' 星 · 截止 ' + dueText(t)));
+      out.push('CATEGORIES:' + icsEsc(cat.name));
+      out.push('SEQUENCE:' + (Number(t.rev) || 0));
+      out.push('STATUS:CONFIRMED');
+      out.push('TRANSP:OPAQUE');
+
+      if (t.remind !== false){
+        REMIND.forEach(function(r){
+          /* 已经过去的时间点不再设置，避免导入时立刻炸出一堆过期提醒 */
+          if (due.getTime() - r.ms <= now.getTime()) return;
+          out.push('BEGIN:VALARM');
+          out.push('ACTION:DISPLAY');
+          out.push('TRIGGER;RELATED=START:' + r.trigger);
+          out.push('DESCRIPTION:' + icsEsc(t.title));
+          out.push('END:VALARM');
+        });
+      }
+      out.push('END:VEVENT');
+    });
+
+    out.push('END:VCALENDAR');
+    return out.join('\r\n') + '\r\n';
+  }
+
+  function downloadICS(text, name){
+    try {
+      var blob = new Blob([text], { type:'text/calendar;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 6000);
+    } catch (e) {
+      toast('导出失败，换个浏览器试试');
+    }
+  }
+
+  function exportCalendar(){
+    var list = tasks.filter(function(t){ return !t.done; }).sort(cmpPending);
+    if (!list.length){ toast('没有未完成的任务'); return; }
+
+    var name = '清单日历-' + dateStr(new Date()) + '.ics';
+    var text = buildCalendar(list);
+    var file = null;
+    try { file = new File([text], name, { type:'text/calendar' }); } catch (e) { file = null; }
+
+    if (file && navigator.canShare && navigator.canShare({ files:[file] }) && navigator.share){
+      navigator.share({ files:[file], title:'我的清单', text:'选择「日历」导入，之后按提醒点通知' })
+        .then(function(){ closeSheet(); toast('选择「日历」打开即可导入'); })
+        .catch(function(err){
+          if (err && err.name === 'AbortError') return;
+          downloadICS(text, name);
+          toast('已导出 .ics，点开用日历打开');
+        });
+      return;
+    }
+
+    downloadICS(text, name);
+    toast('已导出 .ics，点开用日历打开');
+  }
+
   /* ================= 事件 ================= */
   function bind(){
     document.addEventListener('click', function(e){
@@ -1016,6 +1156,13 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:.5;cursor:pointer}
       var b = e.target.closest('[data-star]');
       if (b){ setStars(Number(b.getAttribute('data-star'))); if ($('#formHint').classList.contains('err')) setHint(''); }
     });
+
+    $('#fRemind').addEventListener('click', function(e){
+      var b = e.target.closest('[data-remind]');
+      if (b) setRemind(b.getAttribute('data-remind') === '1');
+    });
+
+    $('#calBtn').addEventListener('click', exportCalendar);
 
     $('#fDueDate').addEventListener('change', function(){
       if (!etaTouched && $('#fEtaDate').value !== this.value) $('#fEtaDate').value = this.value;
